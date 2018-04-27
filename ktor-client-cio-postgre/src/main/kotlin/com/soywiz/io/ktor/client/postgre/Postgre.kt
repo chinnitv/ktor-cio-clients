@@ -3,17 +3,26 @@ package com.soywiz.io.ktor.client.postgre
 import com.soywiz.io.ktor.client.db.*
 import com.soywiz.io.ktor.client.util.*
 import com.soywiz.io.ktor.client.util.sync.*
-import io.ktor.network.sockets.*
-import kotlinx.coroutines.experimental.channels.*
-import kotlinx.coroutines.experimental.io.*
-import kotlinx.coroutines.experimental.time.*
-import org.slf4j.*
-import java.io.*
-import java.net.*
-import java.time.*
-import javax.management.ObjectName
+import io.ktor.network.sockets.aSocket
+import io.ktor.network.sockets.openReadChannel
+import io.ktor.network.sockets.openWriteChannel
+import kotlinx.coroutines.experimental.channels.ClosedReceiveChannelException
+import kotlinx.coroutines.experimental.io.ByteOrder
+import kotlinx.coroutines.experimental.io.ByteReadChannel
+import kotlinx.coroutines.experimental.io.ByteWriteChannel
+import kotlinx.coroutines.experimental.io.writeByte
+import kotlinx.coroutines.experimental.time.delay
+import org.slf4j.LoggerFactory
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.lang.management.ManagementFactory
+import java.net.ConnectException
+import java.net.InetSocketAddress
+import java.security.MessageDigest
+import java.time.Duration
 import java.util.*
+import javax.management.ObjectName
+import javax.xml.bind.DatatypeConverter
 
 
 // https://www.postgresql.org/docs/9.3/static/protocol.html
@@ -47,6 +56,20 @@ class PostgreStats internal constructor(private val client: InternalPostgreClien
     override val errorCount get() = client.errorCount
     override val queryStarted: Int get() = client.queryStarted
     override val queryCompleted: Int get() = client.queryCompleted
+}
+
+fun md5Encode(userName: String, password: String?, salt: ByteArray): String {
+    try {
+        val md = MessageDigest.getInstance("MD5")
+
+        md.update(password?.toByteArray(Charsets.UTF_8))
+        md.update(userName.toByteArray(Charsets.UTF_8))
+        md.update(DatatypeConverter.printHexBinary(md.digest()).toLowerCase().toByteArray(Charsets.US_ASCII))
+        md.update(salt)
+        return "md5" + DatatypeConverter.printHexBinary(md.digest()).toLowerCase()
+    } catch (e: Exception) {
+        throw e
+    }
 }
 
 internal class InternalPostgreClient(
@@ -153,8 +176,8 @@ internal class InternalPostgreClient(
                 ensure()
                 try {
                     return queryQueue {
-                        debug { "---------------------" }
-                        debug { "QUERY: $query" }
+                        //debug { "---------------------" }
+                        //debug { "QUERY: $query" }
                         write.writePostgrePacket(PostgrePacket('Q') {
                             writeStringz(query)
                         })
@@ -164,7 +187,7 @@ internal class InternalPostgreClient(
                         read@ while (true) {
 
                             val packet = read.readPostgrePacket(config)
-                            debug { "PACKET: ${packet.typeChar} : ${packet.payload.toString(Charsets.UTF_8)}" }
+                            //debug { "PACKET: ${packet.typeChar} : ${packet.payload.toString(Charsets.UTF_8)}" }
                             when (packet.typeChar) {
                                 'T' -> { // RowDescription (B)
                                     // https://www.postgresql.org/docs/9.2/static/catalog-pg-type.html
@@ -253,8 +276,11 @@ internal class InternalPostgreClient(
                             TODO("AuthenticationCleartextPassword")
                         }
                         5 -> { // AuthenticationMD5Password
-                            val salt = readS32_be()
-                            TODO("AuthenticationMD5Password")
+                            val salt = readBytesExact(4)
+                            write.writePostgrePacket(com.soywiz.io.ktor.client.postgre.PostgrePacket('p') {
+                                writeStringz(md5Encode(props.user, props.password, salt))
+                            })
+                            return CONTINUE
                         }
                         6 -> { // AuthenticationSCMCredential
                             TODO("AuthenticationSCMCredential")
