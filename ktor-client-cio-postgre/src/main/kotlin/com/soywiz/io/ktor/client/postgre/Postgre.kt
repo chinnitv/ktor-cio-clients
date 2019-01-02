@@ -22,7 +22,7 @@ import java.security.MessageDigest
 import java.time.Duration
 import java.util.*
 import javax.management.ObjectName
-import javax.xml.bind.DatatypeConverter
+import kotlin.experimental.and
 
 
 // https://www.postgresql.org/docs/9.3/static/protocol.html
@@ -58,15 +58,24 @@ class PostgreStats internal constructor(private val client: InternalPostgreClien
     override val queryCompleted: Int get() = client.queryCompleted
 }
 
+private val hexCode = "0123456789abcdef".toCharArray()
+fun printHexBinary(data: ByteArray): String {
+    val r = StringBuilder(data.size * 2)
+    for (b in data) {
+        r.append(hexCode[((b.toInt() shr 4) and 0xF)])
+        r.append(hexCode[(b and 0xF).toInt()])
+    }
+    return r.toString()
+}
+
 fun md5Encode(userName: String, password: String?, salt: ByteArray): String {
     try {
         val md = MessageDigest.getInstance("MD5")
-
         md.update(password?.toByteArray(Charsets.UTF_8))
         md.update(userName.toByteArray(Charsets.UTF_8))
-        md.update(DatatypeConverter.printHexBinary(md.digest()).toLowerCase().toByteArray(Charsets.US_ASCII))
+        md.update(printHexBinary(md.digest()).toByteArray(Charsets.US_ASCII))
         md.update(salt)
-        return "md5" + DatatypeConverter.printHexBinary(md.digest()).toLowerCase()
+        return "md5" + printHexBinary(md.digest())
     } catch (e: Exception) {
         throw e
     }
